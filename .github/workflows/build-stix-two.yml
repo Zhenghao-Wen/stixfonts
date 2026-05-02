@@ -1,4 +1,4 @@
-name: Build STIX Two Fonts (tirobuild – final fix)
+name: Build STIX Two Fonts (tirobuild – final)
 
 on:
   push:
@@ -29,28 +29,29 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            wget \
-            ttfautohint
+          sudo apt-get install -y --no-install-recommends wget ttfautohint
 
-      - name: Install Python packages (including setuptools)
+      - name: Install Python dependencies and fix setuptools
         run: |
-          # 升级 pip 和 wheel
+          # 升级基础工具
           pip install --upgrade pip wheel
 
-          # 安装项目依赖（requirements.txt 包含了所有必要的包，但缺少 setuptools）
+          # 安装项目所需的所有依赖（包括 fs, fonttools 等）
           pip install -r requirements.txt
 
-          # 关键步骤：显式安装 setuptools (提供 pkg_resources)
-          pip install setuptools
+          # 彻底移除并重新安装 setuptools（解决 pkg_resources 缺失问题）
+          pip uninstall -y setuptools || true
+          pip install --no-cache-dir setuptools==70.0.0
 
-          # 强制重装 fs，确保其命名空间声明能找到刚安装的 pkg_resources
+          # 验证 pkg_resources 是否可用
+          python -c "import pkg_resources; print('pkg_resources module loaded successfully')"
+
+          # 强制重装 fs，确保它使用正确的命名空间
           pip install --force-reinstall --no-deps fs
 
-          # 验证环境（可选）
-          python -c "import pkg_resources; print('pkg_resources OK')"
-          python -c "import fs; print('fs OK')"
-          python -c "import ufo2ft; print('ufo2ft OK')"
+          # 验证其他关键模块
+          python -c "import fs; print('fs module works')"
+          python -c "import ufo2ft; print('ufo2ft module works')"
 
       - name: Build fonts with tirobuild.py
         run: |
