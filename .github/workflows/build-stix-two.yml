@@ -1,5 +1,4 @@
-# .github/workflows/build-stix-two.yml
-name: Build STIX Two Fonts (using tirobuild.py)
+name: Build STIX Two Fonts (tirobuild – final fix)
 
 on:
   push:
@@ -25,9 +24,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          # 禁用 pip 缓存，避免干扰
           cache: 'pip'
-          cache-dependency-path: pyproject.toml
 
       - name: Install system dependencies
         run: |
@@ -36,28 +33,30 @@ jobs:
             wget \
             ttfautohint
 
-      - name: Clean pip cache and install base packages
+      - name: Install Python packages (including setuptools)
         run: |
-          pip cache purge
+          # 升级 pip 和 wheel
           pip install --upgrade pip wheel
-          pip install --force-reinstall --no-cache-dir setuptools
 
-      - name: Install project dependencies
-        run: |
-          # 先安装 requirements.txt（可能包含旧版依赖）
-          pip install -r requirements.txt --no-cache-dir
-          # 关键：重新安装 fs 和 fonttools，确保 pkg_resources 可用
-          pip install --force-reinstall --no-cache-dir fs fonttools ufo2ft
-          pip install cffsubr ttfautohint-py psautohint
-          # 验证
-          python -c "import pkg_resources; print('pkg_resources module found')"
-          python -c "import fs; print('fs module works')"
+          # 安装项目依赖（requirements.txt 包含了所有必要的包，但缺少 setuptools）
+          pip install -r requirements.txt
 
-      - name: Run tirobuild.py
+          # 关键步骤：显式安装 setuptools (提供 pkg_resources)
+          pip install setuptools
+
+          # 强制重装 fs，确保其命名空间声明能找到刚安装的 pkg_resources
+          pip install --force-reinstall --no-deps fs
+
+          # 验证环境（可选）
+          python -c "import pkg_resources; print('pkg_resources OK')"
+          python -c "import fs; print('fs OK')"
+          python -c "import ufo2ft; print('ufo2ft OK')"
+
+      - name: Build fonts with tirobuild.py
         run: |
           python tools/tirobuild.py STIXbuild.yml
 
-      - name: Package artifacts (classified by type)
+      - name: Package artifacts by category
         run: |
           mkdir -p artifacts tmp
           find output -type f \( -name "*.ttf" -o -name "*.otf" -o -name "*.woff" -o -name "*.woff2" \) | while read file; do
