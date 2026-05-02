@@ -32,15 +32,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             wget \
-            ttfautohint \
-            npm
-          sudo npm install -g psautohint
+            ttfautohint
 
       - name: Install Python packages
         run: |
           pip install --upgrade pip wheel
           pip install -r requirements.txt
-          pip install fonttools ufo2ft cffsubr ttfautohint-py
+          pip install fonttools ufo2ft cffsubr ttfautohint-py psautohint
 
       - name: Run tirobuild.py
         run: |
