@@ -25,7 +25,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          # 禁用 pip 缓存，避免干扰
           cache: 'pip'
+          cache-dependency-path: pyproject.toml
 
       - name: Install system dependencies
         run: |
@@ -34,11 +36,22 @@ jobs:
             wget \
             ttfautohint
 
-      - name: Install Python packages
+      - name: Clean pip cache and install base packages
         run: |
-          pip install --upgrade pip wheel setuptools
-          pip install -r requirements.txt
-          pip install fonttools ufo2ft cffsubr ttfautohint-py psautohint fs
+          pip cache purge
+          pip install --upgrade pip wheel
+          pip install --force-reinstall --no-cache-dir setuptools
+
+      - name: Install project dependencies
+        run: |
+          # 先安装 requirements.txt（可能包含旧版依赖）
+          pip install -r requirements.txt --no-cache-dir
+          # 关键：重新安装 fs 和 fonttools，确保 pkg_resources 可用
+          pip install --force-reinstall --no-cache-dir fs fonttools ufo2ft
+          pip install cffsubr ttfautohint-py psautohint
+          # 验证
+          python -c "import pkg_resources; print('pkg_resources module found')"
+          python -c "import fs; print('fs module works')"
 
       - name: Run tirobuild.py
         run: |
