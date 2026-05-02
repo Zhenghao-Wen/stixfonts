@@ -36,9 +36,9 @@ jobs:
 
       - name: Install Python packages
         run: |
-          pip install --upgrade pip wheel
+          pip install --upgrade pip wheel setuptools
           pip install -r requirements.txt
-          pip install fonttools ufo2ft cffsubr ttfautohint-py psautohint
+          pip install fonttools ufo2ft cffsubr ttfautohint-py psautohint fs
 
       - name: Run tirobuild.py
         run: |
