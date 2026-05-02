@@ -1,0 +1,186 @@
+# .github/workflows/build-stix-two.yml
+name: Build STIX Two Fonts (all formats)
+
+on:
+  push:
+    branches: [ main, master ]
+    paths-ignore: [ '**.md', 'docs/**' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            wget \
+            ttfautohint
+
+      - name: Install Python packages
+        run: |
+          pip install --upgrade pip wheel
+          pip install -r requirements.txt
+          pip install fontmake cffsubr ttfautohint-py psautohint
+
+      - name: Create build directories
+        run: |
+          mkdir -p build/masters \
+                   build/static_ttf build/static_otf \
+                   build/variable_ttf build/variable_otf \
+                   build/static_ttf_woff build/static_ttf_woff2 \
+                   build/static_otf_woff build/static_otf_woff2 \
+                   build/variable_ttf_woff build/variable_ttf_woff2 \
+                   build/variable_otf_woff build/variable_otf_woff2
+
+      - name: Preprocess UFO masters
+        run: |
+          TEXT_MASTERS="Regular Bold Italic BoldItalic"
+          MATH_MASTERS="Regular"
+          for m in $TEXT_MASTERS; do
+            python3 tools/preprocess-ufo.py \
+              source/STIXTwoText-$m.ufo \
+              source/STIX2-Dev2Post.ren \
+              source/STIXTwoText-$m.input.ttf \
+              build/masters/STIXTwoText-$m.ufo
+          done
+          for m in $MATH_MASTERS; do
+            python3 tools/preprocess-ufo.py \
+              source/STIXTwoMath-$m.ufo \
+              source/STIX2-Dev2Post.ren \
+              source/STIXTwoMath-$m.input.ttf \
+              build/masters/STIXTwoMath-$m.ufo
+          done
+
+      - name: Build Roman variable fonts
+        run: |
+          fontmake -m source/STIXTwoTextVF-Roman.designspace \
+            -o variable --output-path build/variable_ttf/STIXTwoText[wght].ttf
+          fontmake -m source/STIXTwoTextVF-Roman.designspace \
+            -o variable-cff2 --output-path build/variable_otf/STIXTwoText[wght].otf
+
+      - name: Build Italic variable fonts
+        run: |
+          fontmake -m source/STIXTwoTextVF-Italic.designspace \
+            -o variable --output-path build/variable_ttf/STIXTwoText-Italic[wght].ttf
+          fontmake -m source/STIXTwoTextVF-Italic.designspace \
+            -o variable-cff2 --output-path build/variable_otf/STIXTwoText-Italic[wght].otf
+
+      - name: Build static instances (TTF & OTF)
+        run: |
+          fontmake -m source/STIXTwoTextVF-Roman.designspace \
+            -o ttf --output-dir build/static_ttf -i --interpolate-binary-layout
+          fontmake -m source/STIXTwoTextVF-Roman.designspace \
+            -o otf --output-dir build/static_otf -i --interpolate-binary-layout
+          fontmake -m source/STIXTwoTextVF-Italic.designspace \
+            -o ttf --output-dir build/static_ttf -i --interpolate-binary-layout
+          fontmake -m source/STIXTwoTextVF-Italic.designspace \
+            -o otf --output-dir build/static_otf -i --interpolate-binary-layout
+
+      - name: Build Math static fonts
+        run: |
+          fontmake -u build/masters/STIXTwoMath-Regular.ufo \
+            -o ttf --output-path build/static_ttf/STIXTwoMath-Regular.ttf
+          fontmake -u build/masters/STIXTwoMath-Regular.ufo \
+            -o otf --output-path build/static_otf/STIXTwoMath-Regular.otf
+
+      - name: Autohint TTF fonts
+        run: |
+          for f in build/static_ttf/*.ttf; do
+            echo "Hinting $(basename $f)"
+            ttfautohint --no-info "$f" "$f.tmp" && mv "$f.tmp" "$f"
+          done
+
+      - name: Autohint OTF fonts (CFF hinting)
+        run: |
+          for f in build/static_otf/*.otf; do
+            echo "Hinting $(basename $f)"
+            psautohint "$f" -o "$f.tmp" && \
+            python -m cffsubr "$f.tmp" -o "$f" && \
+            rm "$f.tmp"
+          done
+
+      - name: Post-process static fonts
+        run: |
+          for f in build/static_ttf/*.ttf build/static_otf/*.otf; do
+            python3 tools/postprocess-static.py "$f"
+          done
+
+      - name: Post-process variable fonts
+        run: |
+          for f in build/variable_ttf/*.ttf build/variable_otf/*.otf; do
+            python3 tools/postprocess-variable.py "$f"
+          done
+
+      - name: Generate WOFF / WOFF2 web fonts
+        run: |
+          for format in ttf otf; do
+            for dir in static variable; do
+              src_dir="build/${dir}_${format}"
+              [ -d "$src_dir" ] || continue
+              for woff in woff woff2; do
+                out_dir="build/${dir}_${format}_${woff}"
+                mkdir -p "$out_dir"
+                for f in "$src_dir"/*."$format"; do
+                  base=$(basename "$f" ."$format")
+                  python3 tools/make-woff.py "$f" "$woff" "$out_dir/$base.$woff"
+                done
+              done
+            done
+          done
+
+      - name: Package artifacts (separate archives per directory)
+        run: |
+          for dir in build/*/ ; do
+            [ -d "$dir" ] || continue
+            name=$(basename "$dir")
+            if [ -n "$(ls -A "$dir")" ]; then
+              zip -r "stix-two-${name}.zip" "$dir"
+            fi
+          done
+
+      - name: Upload static TTF
+        uses: actions/upload-artifact@v4
+        with:
+          name: stix-two-static-ttf
+          path: stix-two-static_ttf.zip
+
+      - name: Upload static OTF
+        uses: actions/upload-artifact@v4
+        with:
+          name: stix-two-static-otf
+          path: stix-two-static_otf.zip
+
+      - name: Upload variable TTF
+        uses: actions/upload-artifact@v4
+        with:
+          name: stix-two-variable-ttf
+          path: stix-two-variable_ttf.zip
+
+      - name: Upload variable OTF (CFF2)
+        uses: actions/upload-artifact@v4
+        with:
+          name: stix-two-variable-otf
+          path: stix-two-variable_otf.zip
+
+      - name: Upload web fonts (WOFF/WOFF2)
+        uses: actions/upload-artifact@v4
+        with:
+          name: stix-two-web-fonts
+          path: stix-two-*woff*.zip
