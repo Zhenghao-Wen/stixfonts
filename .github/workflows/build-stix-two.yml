@@ -1,4 +1,5 @@
-name: Build STIX Two Fonts (tirobuild – final)
+# .github/workflows/build-stix-two.yml
+name: Build STIX Two Fonts (tirobuild)
 
 on:
   push:
@@ -33,33 +34,28 @@ jobs:
 
       - name: Install Python dependencies and fix setuptools
         run: |
-          # 升级基础工具
           pip install --upgrade pip wheel
-
-          # 安装项目所需的所有依赖（包括 fs, fonttools 等）
           pip install -r requirements.txt
-
-          # 彻底移除并重新安装 setuptools（解决 pkg_resources 缺失问题）
+          # 修复 pkg_resources
           pip uninstall -y setuptools || true
           pip install --no-cache-dir setuptools==70.0.0
-
-          # 验证 pkg_resources 是否可用
-          python -c "import pkg_resources; print('pkg_resources module loaded successfully')"
-
-          # 强制重装 fs，确保它使用正确的命名空间
+          python -c "import pkg_resources; print('pkg_resources OK')"
           pip install --force-reinstall --no-deps fs
-
-          # 验证其他关键模块
-          python -c "import fs; print('fs module works')"
-          python -c "import ufo2ft; print('ufo2ft module works')"
+          python -c "import fs; print('fs OK')"
+          python -c "import ufo2ft; print('ufo2ft OK')"
 
       - name: Build fonts with tirobuild.py
-        run: |
-          python tools/tirobuild.py STIXbuild.yml
+        run: python tools/tirobuild.py STIXbuild.yml
 
-      - name: Package artifacts by category
+      - name: Organize artifacts by category
         run: |
-          mkdir -p artifacts tmp
+          mkdir -p package/static-ttf \
+                   package/static-otf \
+                   package/variable-ttf \
+                   package/variable-otf \
+                   package/web \
+                   package/other
+
           find output -type f \( -name "*.ttf" -o -name "*.otf" -o -name "*.woff" -o -name "*.woff2" \) | while read file; do
             if [[ "$file" =~ \.woff2?$ ]]; then
               category="web"
@@ -74,50 +70,42 @@ jobs:
             else
               category="other"
             fi
-            mkdir -p "tmp/$category"
-            cp "$file" "tmp/$category/"
+            cp "$file" "package/$category/"
           done
-
-          for cat in static-ttf static-otf variable-ttf variable-otf web other; do
-            if [ -d "tmp/$cat" ] && [ -n "$(ls -A tmp/$cat)" ]; then
-              (cd tmp && zip -r "../artifacts/stix-two-${cat}.zip" "$cat")
-            fi
-          done
-          rm -rf tmp
 
       - name: Upload static TTF
         uses: actions/upload-artifact@v4
         with:
           name: stix-two-static-ttf
-          path: artifacts/stix-two-static-ttf.zip
+          path: package/static-ttf
           if-no-files-found: ignore
 
       - name: Upload static OTF
         uses: actions/upload-artifact@v4
         with:
           name: stix-two-static-otf
-          path: artifacts/stix-two-static-otf.zip
+          path: package/static-otf
           if-no-files-found: ignore
 
       - name: Upload variable TTF
         uses: actions/upload-artifact@v4
         with:
           name: stix-two-variable-ttf
-          path: artifacts/stix-two-variable-ttf.zip
+          path: package/variable-ttf
           if-no-files-found: ignore
 
       - name: Upload variable OTF (CFF2)
         uses: actions/upload-artifact@v4
         with:
           name: stix-two-variable-otf
-          path: artifacts/stix-two-variable-otf.zip
+          path: package/variable-otf
           if-no-files-found: ignore
 
       - name: Upload web fonts (WOFF/WOFF2)
         uses: actions/upload-artifact@v4
         with:
           name: stix-two-web-fonts
-          path: artifacts/stix-two-web.zip
+          path: package/web
           if-no-files-found: ignore
 
       - name: Upload other (fallback)
@@ -125,5 +113,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: stix-two-other
-          path: artifacts/stix-two-other.zip
+          path: package/other
           if-no-files-found: ignore
