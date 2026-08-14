@@ -54,10 +54,14 @@ jobs:
                    package/variable-ttf \
                    package/variable-otf \
                    package/web \
+                   package/math \
                    package/other
 
           find output -type f \( -name "*.ttf" -o -name "*.otf" -o -name "*.woff" -o -name "*.woff2" \) | while read file; do
-            if [[ "$file" =~ \.woff2?$ ]]; then
+            # 优先匹配数学字体（路径中包含 Math）
+            if [[ "$file" =~ [Mm]ath ]]; then
+              category="math"
+            elif [[ "$file" =~ \.woff2?$ ]]; then
               category="web"
             elif [[ "$file" =~ /TTFVF/ ]]; then
               category="variable-ttf"
@@ -106,6 +110,13 @@ jobs:
         with:
           name: stix-two-web-fonts
           path: package/web
+          if-no-files-found: ignore
+
+      - name: Upload math fonts
+        uses: actions/upload-artifact@v4
+        with:
+          name: stix-two-math
+          path: package/math
           if-no-files-found: ignore
 
       - name: Upload other (fallback)
