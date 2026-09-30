@@ -1,25 +1,57 @@
 # .github/workflows/build-stix-two.yml
-name: Build STIX Two Fonts (tirobuild)
+name: Build & Release STIX Two Fonts
 
 on:
-  push:
-    branches: [ main, master ]
-    paths-ignore: [ '**.md', 'docs/**' ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write   # 创建标签和 Release 需要
+
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90   # 构建两遍，时间放宽
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           submodules: true
+
+      - name: Read version from STIXbuild.yml
+        id: version
+        run: |
+          VERSION=$(sed -n '2p' STIXbuild.yml | sed 's/.*Version[[:space:]]*//' | tr -d '[:space:]')
+          if [ -z "$VERSION" ]; then
+            echo "Failed to read version from STIXbuild.yml line 2" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $VERSION"
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push tag if needed
+        id: tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          TAG="v${VERSION}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists locally."
+          elif git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            echo "Tag $TAG already exists on remote."
+            git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
+          else
+            echo "Creating tag $TAG"
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Setup Python 3.12
         uses: actions/setup-python@v5
@@ -36,7 +68,6 @@ jobs:
         run: |
           pip install --upgrade pip wheel
           pip install -r requirements.txt
-          # 修复 pkg_resources
           pip uninstall -y setuptools || true
           pip install --no-cache-dir setuptools==70.0.0
           python -c "import pkg_resources; print('pkg_resources OK')"
@@ -44,21 +75,32 @@ jobs:
           python -c "import fs; print('fs OK')"
           python -c "import ufo2ft; print('ufo2ft OK')"
 
-      - name: Build fonts with tirobuild.py
+      - name: Prepare no-hint configuration
+        run: |
+          python3 - <<'EOF'
+          import yaml
+          with open('STIXbuild.yml') as f:
+              conf = yaml.safe_load(f)
+          for name, fc in conf.get('fonts', {}).items():
+              fc['autohinting'] = {
+                  'ttfautohint': {'disable': True},
+                  'psautohint': {'disable': True},
+              }
+          with open('STIXbuild-nohint.yml', 'w') as f:
+              yaml.safe_dump(conf, f, sort_keys=False)
+          print('Created STIXbuild-nohint.yml')
+          EOF
+
+      - name: Build hinted fonts
         run: python tools/tirobuild.py STIXbuild.yml
 
-      - name: Organize artifacts by category
-        run: |
-          mkdir -p package/static-ttf \
-                   package/static-otf \
-                   package/variable-ttf \
-                   package/variable-otf \
-                   package/web \
-                   package/math \
-                   package/other
+      - name: Build no-hint fonts
+        run: python tools/tirobuild.py STIXbuild-nohint.yml
 
-          find output -type f \( -name "*.ttf" -o -name "*.otf" -o -name "*.woff" -o -name "*.woff2" \) | while read file; do
-            # 优先匹配数学字体（路径中包含 Math）
+      - name: Organize hinted artifacts
+        run: |
+          mkdir -p package/static-ttf package/static-otf package/variable-ttf package/variable-otf package/web package/math package/other
+          find output/STIXbuild -type f \( -name "*.ttf" -o -name "*.otf" -o -name "*.woff" -o -name "*.woff2" \) | while read file; do
             if [[ "$file" =~ [Mm]ath ]]; then
               category="math"
             elif [[ "$file" =~ \.woff2?$ ]]; then
@@ -76,53 +118,200 @@ jobs:
             fi
             cp "$file" "package/$category/"
           done
+          echo "=== Hinted package ==="
+          find package -type f | sort
 
-      - name: Upload static TTF
+      - name: Organize no-hint artifacts
+        run: |
+          mkdir -p package-nohint/static-ttf package-nohint/static-otf package-nohint/variable-ttf package-nohint/variable-otf package-nohint/web package-nohint/math package-nohint/other
+          find output/STIXbuild-nohint -type f \( -name "*.ttf" -o -name "*.otf" -o -name "*.woff" -o -name "*.woff2" \) | while read file; do
+            if [[ "$file" =~ [Mm]ath ]]; then
+              category="math"
+            elif [[ "$file" =~ \.woff2?$ ]]; then
+              category="web"
+            elif [[ "$file" =~ /TTFVF/ ]]; then
+              category="variable-ttf"
+            elif [[ "$file" =~ /OTFVF/ ]]; then
+              category="variable-otf"
+            elif [[ "$file" =~ /TTF/ ]]; then
+              category="static-ttf"
+            elif [[ "$file" =~ /OTF/ ]]; then
+              category="static-otf"
+            else
+              category="other"
+            fi
+            cp "$file" "package-nohint/$category/"
+          done
+          echo "=== No-hint package ==="
+          find package-nohint -type f | sort
+
+      # ---------- 上传 hinted artifacts ----------
+      - name: Upload hinted static TTF
         uses: actions/upload-artifact@v4
         with:
           name: stix-two-static-ttf
           path: package/static-ttf
           if-no-files-found: ignore
 
-      - name: Upload static OTF
+      - name: Upload hinted static OTF
         uses: actions/upload-artifact@v4
         with:
           name: stix-two-static-otf
           path: package/static-otf
           if-no-files-found: ignore
 
-      - name: Upload variable TTF
+      - name: Upload hinted variable TTF
         uses: actions/upload-artifact@v4
         with:
           name: stix-two-variable-ttf
           path: package/variable-ttf
           if-no-files-found: ignore
 
-      - name: Upload variable OTF (CFF2)
+      - name: Upload hinted variable OTF
         uses: actions/upload-artifact@v4
         with:
           name: stix-two-variable-otf
           path: package/variable-otf
           if-no-files-found: ignore
 
-      - name: Upload web fonts (WOFF/WOFF2)
+      - name: Upload hinted web fonts
         uses: actions/upload-artifact@v4
         with:
           name: stix-two-web-fonts
           path: package/web
           if-no-files-found: ignore
 
-      - name: Upload math fonts
+      - name: Upload hinted math fonts
         uses: actions/upload-artifact@v4
         with:
           name: stix-two-math
           path: package/math
           if-no-files-found: ignore
 
-      - name: Upload other (fallback)
-        if: always()
+      # ---------- 上传 no-hint artifacts ----------
+      - name: Upload no-hint static TTF
         uses: actions/upload-artifact@v4
         with:
-          name: stix-two-other
-          path: package/other
+          name: stix-two-static-ttf-nohint
+          path: package-nohint/static-ttf
           if-no-files-found: ignore
+
+      - name: Upload no-hint static OTF
+        uses: actions/upload-artifact@v4
+        with:
+          name: stix-two-static-otf-nohint
+          path: package-nohint/static-otf
+          if-no-files-found: ignore
+
+      - name: Upload no-hint variable TTF
+        uses: actions/upload-artifact@v4
+        with:
+          name: stix-two-variable-ttf-nohint
+          path: package-nohint/variable-ttf
+          if-no-files-found: ignore
+
+      - name: Upload no-hint variable OTF
+        uses: actions/upload-artifact@v4
+        with:
+          name: stix-two-variable-otf-nohint
+          path: package-nohint/variable-otf
+          if-no-files-found: ignore
+
+      - name: Upload no-hint web fonts
+        uses: actions/upload-artifact@v4
+        with:
+          name: stix-two-web-fonts-nohint
+          path: package-nohint/web
+          if-no-files-found: ignore
+
+      - name: Upload no-hint math fonts
+        uses: actions/upload-artifact@v4
+        with:
+          name: stix-two-math-nohint
+          path: package-nohint/math
+          if-no-files-found: ignore
+
+      # ---------- 创建 ZIP ----------
+      - name: Create ZIP archives
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd package
+          for dir in */; do
+            name=$(basename "$dir")
+            if [ -d "$dir" ] && [ -n "$(ls -A "$dir")" ]; then
+              zip -r "../stix-two-${name}-v${VERSION}.zip" "$dir"
+            fi
+          done
+          cd ..
+          cd package-nohint
+          for dir in */; do
+            name=$(basename "$dir")
+            if [ -d "$dir" ] && [ -n "$(ls -A "$dir")" ]; then
+              zip -r "../stix-two-${name}-nohint-v${VERSION}.zip" "$dir"
+            fi
+          done
+          cd ..
+          echo "=== ZIP files ==="
+          ls -la *.zip || true
+
+      # ---------- 发布 Release ----------
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: STIX Two Fonts ${{ steps.tag.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## STIX Two Fonts ${{ steps.tag.outputs.tag }}
+
+            Automatically built from `STIXbuild.yml` via `tools/tirobuild.py`.
+
+            Two variants are provided:
+
+            - **Hinted**: `stix-two-<category>-v${{ steps.version.outputs.version }}.zip`
+            - **No-hint**: `stix-two-<category>-nohint-v${{ steps.version.outputs.version }}.zip`
+
+            ### Packages
+
+            | Package | Contents |
+            |---------|----------|
+            | `stix-two-static-ttf[-nohint]-v${{ steps.version.outputs.version }}.zip` | Static TrueType fonts (Regular, Medium, SemiBold, Bold) |
+            | `stix-two-static-otf[-nohint]-v${{ steps.version.outputs.version }}.zip` | Static OpenType fonts |
+            | `stix-two-variable-ttf[-nohint]-v${{ steps.version.outputs.version }}.zip` | Variable TrueType fonts (Roman + Italic) |
+            | `stix-two-variable-otf[-nohint]-v${{ steps.version.outputs.version }}.zip` | Variable OpenType (CFF2) fonts |
+            | `stix-two-web[-nohint]-v${{ steps.version.outputs.version }}.zip` | Web fonts (WOFF / WOFF2) |
+            | `stix-two-math[-nohint]-v${{ steps.version.outputs.version }}.zip` | STIX Two Math font |
+            | `stix-two-other[-nohint]-v${{ steps.version.outputs.version }}.zip` | Fallback category |
+
+            ### Notes
+
+            - **Variable OTF (CFF2) fonts are experimental** and have **poor compatibility** with many applications and operating systems. For most use cases, prefer the **Variable TTF** or **Static TTF** builds.
+            - **The `other` category is a fallback bucket** and usually contains no files worth downloading. You can safely ignore it unless you are debugging the build process.
+            - The **no-hint** variant disables TrueType and CFF hinting for static fonts. Variable fonts are inherently unhinted, so their `-nohint` packages are identical to the hinted ones and can be ignored.
+
+            ### Build environment
+
+            - Python 3.12
+            - `fontmake` / `ufo2ft` / `fontTools`
+            - `ttfautohint` / `psautohint`
+            - Configuration: `STIXbuild.yml` and generated `STIXbuild-nohint.yml`
+          files: |
+            stix-two-static-ttf-v${{ steps.version.outputs.version }}.zip
+            stix-two-static-ttf-nohint-v${{ steps.version.outputs.version }}.zip
+            stix-two-static-otf-v${{ steps.version.outputs.version }}.zip
+            stix-two-static-otf-nohint-v${{ steps.version.outputs.version }}.zip
+            stix-two-variable-ttf-v${{ steps.version.outputs.version }}.zip
+            stix-two-variable-ttf-nohint-v${{ steps.version.outputs.version }}.zip
+            stix-two-variable-otf-v${{ steps.version.outputs.version }}.zip
+            stix-two-variable-otf-nohint-v${{ steps.version.outputs.version }}.zip
+            stix-two-web-v${{ steps.version.outputs.version }}.zip
+            stix-two-web-nohint-v${{ steps.version.outputs.version }}.zip
+            stix-two-math-v${{ steps.version.outputs.version }}.zip
+            stix-two-math-nohint-v${{ steps.version.outputs.version }}.zip
+            stix-two-other-v${{ steps.version.outputs.version }}.zip
+            stix-two-other-nohint-v${{ steps.version.outputs.version }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
